@@ -1,0 +1,6 @@
+{
+  "name": "Newsletter Summarizer",
+  "description": "A clean, simple newsletter summarizer that turns lengthy newsletters into clear, easy-to-read highlights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

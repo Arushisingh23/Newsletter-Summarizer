@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public and account identity for authenticated users.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the user."
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "User avatar photo URL."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of account creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update."
+        }
+      },
+      "required": ["userId", "email"]
+    },
+    "UserPreferences": {
+      "title": "UserPreferences",
+      "description": "User personalized settings, routine schedule, and skill filters.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID."
+        },
+        "personaId": {
+          "type": "string",
+          "description": "Selected research persona ID."
+        },
+        "recipientEmail": {
+          "type": "string",
+          "description": "Destination email for weekly briefing."
+        },
+        "gmailLabel": {
+          "type": "string",
+          "description": "Gmail label scope."
+        },
+        "dayOfWeek": {
+          "type": "string",
+          "description": "Day of the week to deliver briefing."
+        },
+        "time": {
+          "type": "string",
+          "description": "Time of day to deliver briefing."
+        },
+        "timeframeDays": {
+          "type": "number",
+          "description": "Number of days of newsletter coverage."
+        },
+        "customOpeningInstruction": {
+          "type": "string",
+          "description": "Customized directive for the agent skill."
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last preference update."
+        }
+      },
+      "required": ["userId", "recipientEmail"]
+    },
+    "UserExperiment": {
+      "title": "UserExperiment",
+      "description": "Empirical testing experiment tracked by the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Experiment title or tool testing name."
+        },
+        "inspiredBy": {
+          "type": "string",
+          "description": "Newsletter source or announcement context."
+        },
+        "coreQuestion": {
+          "type": "string",
+          "description": "Central empirical test question."
+        },
+        "testProtocol": {
+          "type": "string",
+          "description": "Step-by-step 15-30 minute test protocol."
+        },
+        "expectedSignal": {
+          "type": "string",
+          "description": "Expected signal or verification outcome."
+        },
+        "potentialPostAngle": {
+          "type": "string",
+          "description": "Content angle or draft tutorial hook."
+        },
+        "status": {
+          "type": "string",
+          "description": "Status of the experiment: to_test, in_testing, completed, or drafted."
+        },
+        "userVerified": {
+          "type": "boolean",
+          "description": "Whether the user has verified the claim."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Observation logs and timestamps."
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of update."
+        }
+      },
+      "required": ["userId", "title", "coreQuestion", "testProtocol"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document."
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": "UserPreferences",
+      "description": "User personalized settings and routine configuration."
+    },
+    "/users/{userId}/experiments/{experimentId}": {
+      "schema": "UserExperiment",
+      "description": "Empirical research and testing experiments for the user."
+    }
+  }
+}
