@@ -79,7 +79,7 @@ export function LoginLanding({
 
         {/* Heading */}
         <h1 className="text-3xl sm:text-5xl font-black text-stone-950 dark:text-white tracking-tight leading-tight sm:leading-none max-w-2xl mb-4">
-          Read what matters in <span className="underline decoration-pink-400 decoration-wavy decoration-2">2 minutes</span>.
+          Read what matters in <span className="text-pink-600 dark:text-pink-400">2 minutes</span>.
         </h1>
 
         <p className="text-stone-600 dark:text-stone-300 text-sm sm:text-base font-medium max-w-xl leading-relaxed mb-8">

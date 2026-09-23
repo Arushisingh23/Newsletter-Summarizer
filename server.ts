@@ -207,6 +207,110 @@ app.post("/api/send-digest-email", async (req, res) => {
   }
 });
 
+// Fetch incoming newsletters received on the user's mail ID from their Gmail inbox
+app.post("/api/fetch-inbox-newsletters", async (req, res) => {
+  try {
+    const { accessToken, userEmail } = req.body;
+    if (!userEmail) {
+      return res.status(400).json({ success: false, error: "User email is required" });
+    }
+
+    console.log(`[INBOX] Scanning incoming newsletters for user: ${userEmail}`);
+
+    const extractedSummaries: any[] = [];
+
+    // If Google OAuth access token is provided, query the Gmail API for user's actual incoming newsletters
+    if (accessToken) {
+      try {
+        const query = encodeURIComponent('category:updates OR category:promotions OR "unsubscribe" OR label:newsletters');
+        const listRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=6`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          const messages = listData.messages || [];
+
+          for (const msg of messages) {
+            try {
+              const msgRes = await fetch(
+                `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                  },
+                }
+              );
+
+              if (msgRes.ok) {
+                const msgData = await msgRes.json();
+                const headers = msgData.payload?.headers || [];
+                const subjectHeader = headers.find((h: any) => h.name.toLowerCase() === "subject");
+                const fromHeader = headers.find((h: any) => h.name.toLowerCase() === "from");
+                const dateHeader = headers.find((h: any) => h.name.toLowerCase() === "date");
+
+                const rawSubject = subjectHeader ? subjectHeader.value : "Newsletter Update";
+                const rawFrom = fromHeader ? fromHeader.value : "Newsletter";
+                const snippet = msgData.snippet || "";
+
+                // Parse sender name
+                let senderName = rawFrom;
+                const matchName = rawFrom.match(/^(.*?)(?:<.*?>)?$/);
+                if (matchName && matchName[1].trim()) {
+                  senderName = matchName[1].replace(/["']/g, "").trim();
+                }
+
+                // Summarize the user's specific email text
+                const textToSummarize = `Newsletter: ${senderName}\nSubject: ${rawSubject}\n\n${snippet}`;
+                const summaryObj = extractHeuristicSummary(textToSummarize);
+
+                extractedSummaries.push({
+                  id: `gmail-${msg.id}`,
+                  title: rawSubject,
+                  category: summaryObj.category || "Tech & AI",
+                  summary: summaryObj.summary || snippet,
+                  whyItMatters: summaryObj.whyItMatters || `Directly relevant to communications received on ${userEmail}.`,
+                  source: senderName,
+                  readTime: "2 min read",
+                  keyPoints: summaryObj.keyPoints || [snippet.slice(0, 80)],
+                  isReadLater: false,
+                  createdAt: dateHeader?.value ? new Date(dateHeader.value).toISOString() : new Date().toISOString(),
+                });
+              }
+            } catch (msgErr) {
+              console.warn("Failed to fetch individual message:", msgErr);
+            }
+          }
+        } else {
+          console.warn("Gmail API query returned non-OK status:", listRes.status);
+        }
+      } catch (gmailErr) {
+        console.error("Gmail fetch error:", gmailErr);
+      }
+    }
+
+    res.json({
+      success: true,
+      userEmail,
+      count: extractedSummaries.length,
+      summaries: extractedSummaries,
+      message: extractedSummaries.length > 0
+        ? `Found and summarized ${extractedSummaries.length} newsletters for ${userEmail}.`
+        : `No new unsummarized newsletters found in inbox for ${userEmail}.`,
+    });
+  } catch (error: any) {
+    console.error("Fetch inbox newsletters error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Dedicated Newsletter Summarizer Endpoint
 app.post("/api/summarize-newsletter", async (req, res) => {
   try {
@@ -854,4 +958,11 @@ async function startServer() {
   });
 }
 
-startServer();
+export { app };
+export default app;
+
+// In Vercel serverless functions, Vercel manages the HTTP server.
+// Only start standalone listener when not in Vercel.
+if (!process.env.VERCEL) {
+  startServer();
+}

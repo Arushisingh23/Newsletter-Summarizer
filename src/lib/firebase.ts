@@ -26,6 +26,7 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 // Auth instance
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('https://www.googleapis.com/auth/gmail.readonly');
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // Firestore instance (with named databaseId if specified)
@@ -51,6 +52,12 @@ export async function signInWithGoogle(): Promise<User | null> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
+
+    // Capture OAuth access token for fetching user's newsletters from their Gmail
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      sessionStorage.setItem('google_access_token', credential.accessToken);
+    }
 
     // Save or update user profile in Firestore
     if (user) {
