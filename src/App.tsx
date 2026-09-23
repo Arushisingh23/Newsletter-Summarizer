@@ -199,12 +199,35 @@ export default function App() {
     return () => unsubscribe();
   }, [loadDataForUser]);
 
+  const [authErrorInfo, setAuthErrorInfo] = useState<{ title: string; message: string; domain?: string } | null>(null);
+
   const handleSignIn = async () => {
     try {
       await signInWithGoogle();
-    } catch (err) {
-      console.error(err);
-      triggerToast('Sign-in cancelled');
+    } catch (err: any) {
+      console.error('Sign-in error detail:', err);
+      const code = err?.code || '';
+      const currentHost = window.location.hostname;
+
+      if (code === 'auth/operation-not-allowed' || code === 'auth/configuration-not-found') {
+        setAuthErrorInfo({
+          title: 'Google Sign-In Is Not Enabled in Firebase',
+          message: 'Firebase needs Google Sign-In activated first. In Firebase Console, click "Get started", select "Google", toggle it to Enabled, and click Save.',
+        });
+      } else if (code === 'auth/unauthorized-domain') {
+        setAuthErrorInfo({
+          title: 'Domain Not Authorized in Firebase',
+          message: `Firebase blocked sign-in because this website domain is not in your authorized list yet.`,
+          domain: currentHost,
+        });
+      } else if (code === 'auth/popup-blocked') {
+        triggerToast('⚠️ Popup was blocked by your browser. Please allow popups for this site.');
+      } else if (code === 'auth/popup-closed-by-user') {
+        // If it closed almost instantly, it might be due to an unconfigured provider or domain
+        triggerToast('Sign-in popup closed. Make sure Google provider is enabled in Firebase Console.');
+      } else {
+        triggerToast(err?.message || 'Sign-in cancelled');
+      }
     }
   };
 
@@ -415,6 +438,55 @@ export default function App() {
             <span>{toastMessage}</span>
           </div>
         )}
+
+        {authErrorInfo && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <div className="bg-white dark:bg-stone-900 border-2 border-stone-900 dark:border-stone-700 rounded-3xl p-6 max-w-md w-full shadow-[6px_6px_0px_0px_#ec4899] space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center font-black text-lg border-2 border-stone-900">
+                  ⚠️
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-stone-900 dark:text-stone-100">
+                    {authErrorInfo.title}
+                  </h3>
+                  <p className="text-xs text-stone-500">Firebase Setup Notice</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-stone-700 dark:text-stone-300 leading-relaxed font-medium">
+                {authErrorInfo.message}
+              </p>
+
+              {authErrorInfo.domain && (
+                <div className="p-3 bg-stone-100 dark:bg-stone-800 rounded-2xl border border-stone-300 dark:border-stone-700 text-xs">
+                  <span className="font-bold block text-stone-500 text-[10px] uppercase">Domain to add:</span>
+                  <code className="text-pink-600 dark:text-pink-400 font-mono font-bold select-all">
+                    {authErrorInfo.domain}
+                  </code>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <a
+                  href="https://console.firebase.google.com/project/flawless-carver-zmn89/authentication/providers"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-4 py-2 rounded-2xl bg-pink-500 hover:bg-pink-400 text-white font-bold text-xs border-2 border-stone-900 shadow-[2px_2px_0px_0px_#1c1917]"
+                >
+                  Open Firebase Settings ↗
+                </a>
+                <button
+                  onClick={() => setAuthErrorInfo(null)}
+                  className="px-4 py-2 rounded-2xl bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 text-stone-800 dark:text-stone-200 font-bold text-xs border-2 border-stone-900"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <LoginLanding
           onSignIn={handleSignIn}
           onExploreDemo={() => setIsGuestPreview(true)}
