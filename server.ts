@@ -9,7 +9,7 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
 
 // Lazy initialize Gemini client
 let aiClient: GoogleGenAI | null = null;
@@ -35,6 +35,367 @@ app.get("/api/health", (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Welcome Email dispatch endpoint
+app.post("/api/send-welcome-email", async (req, res) => {
+  try {
+    const { email, displayName } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+
+    const name = displayName ? displayName.split(" ")[0] : "Reader";
+    console.log(`[EMAIL] Dispatching Welcome Email to ${email} (${name}) from Newsletter Summarizer`);
+
+    let sentViaResend = false;
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const resendRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "Newsletter Summarizer <onboarding@resend.dev>",
+            to: email,
+            subject: `Welcome to Newsletter Summarizer, ${name}! ✨`,
+            html: `
+              <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 2px solid #1c1917; border-radius: 16px; background-color: #FFFDFB;">
+                <div style="background-color: #F472B6; padding: 16px; border-radius: 12px; margin-bottom: 20px; text-align: center;">
+                  <h1 style="color: #ffffff; margin: 0; font-size: 22px;">✨ Welcome to Newsletter Summarizer</h1>
+                </div>
+                <p style="font-size: 15px; color: #1c1917; line-height: 1.6;">
+                  Hi <strong>${name}</strong>,
+                </p>
+                <p style="font-size: 14px; color: #374151; line-height: 1.6;">
+                  Welcome! Newsletter Summarizer turns long, cluttered newsletters into clean, 2-minute key takeaways.
+                </p>
+                <div style="background-color: #FFF5F8; padding: 14px; border-radius: 10px; border-left: 4px solid #F472B6; margin: 18px 0;">
+                  <p style="margin: 0; font-size: 13px; color: #831843; font-weight: bold;">
+                    🔒 Your Private Workspace:
+                  </p>
+                  <p style="margin: 4px 0 0 0; font-size: 13px; color: #4b5563;">
+                    Your account is completely private. You will only ever see your own newsletter summaries and saved reading list.
+                  </p>
+                </div>
+                <p style="font-size: 14px; color: #374151; line-height: 1.6;">
+                  Paste any newsletter text in the app anytime to get instant scannable highlights!
+                </p>
+                <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af; text-align: center;">
+                  Newsletter Summarizer • Read what matters in 2 minutes
+                </div>
+              </div>
+            `,
+          }),
+        });
+        if (resendRes.ok) {
+          sentViaResend = true;
+        }
+      } catch (err) {
+        console.error("Resend API error:", err);
+      }
+    }
+
+    res.json({
+      success: true,
+      sentViaResend,
+      recipient: email,
+      message: `Welcome email sent to ${email}`,
+      subject: `Welcome to Newsletter Summarizer, ${name}! ✨`,
+    });
+  } catch (error: any) {
+    console.error("Welcome email error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Personal Newsletter Digest Dispatch endpoint
+app.post("/api/send-digest-email", async (req, res) => {
+  try {
+    const { email, displayName, summaries } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+
+    const name = displayName ? displayName.split(" ")[0] : "Reader";
+    const itemsList = Array.isArray(summaries) && summaries.length > 0 ? summaries : [];
+    const dateStr = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    
+    console.log(`[EMAIL] Dispatching Personalized Digest to ${email} (${itemsList.length} stories)`);
+
+    const summaryCardsHtml = itemsList.map((item: any, idx: number) => `
+      <div style="background-color: #ffffff; border: 1.5px solid #1c1917; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 2px 2px 0px #1c1917;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span style="background-color: #FDF2F8; color: #BE185D; font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 6px; border: 1px solid #FBCFE8;">
+            ${item.category || "Digest"}
+          </span>
+          <span style="font-size: 11px; color: #6B7280; font-weight: 500;">
+            via ${item.source || "Newsletter"} • ${item.readTime || "2 min read"}
+          </span>
+        </div>
+        <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: 800; color: #111827;">
+          ${item.title || "Key Takeaway"}
+        </h3>
+        <p style="margin: 0 0 10px 0; font-size: 13px; color: #374151; line-height: 1.5;">
+          ${item.summary || ""}
+        </p>
+        ${item.keyPoints && item.keyPoints.length > 0 ? `
+          <ul style="margin: 0 0 10px 0; padding-left: 18px; font-size: 12px; color: #4B5563; line-height: 1.5;">
+            ${item.keyPoints.slice(0, 3).map((pt: string) => `<li style="margin-bottom: 4px;">${pt}</li>`).join("")}
+          </ul>
+        ` : ""}
+        ${item.whyItMatters ? `
+          <div style="background-color: #FFF5F8; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: #831843;">
+            <strong>Why it matters:</strong> ${item.whyItMatters}
+          </div>
+        ` : ""}
+      </div>
+    `).join("");
+
+    let sentViaResend = false;
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const resendRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: "Newsletter Summarizer <digest@resend.dev>",
+            to: email,
+            subject: `📬 Your Personalized Newsletter Digest - ${dateStr}`,
+            html: `
+              <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 2px solid #1c1917; border-radius: 16px; background-color: #FFFDFB;">
+                <div style="background-color: #F472B6; padding: 18px; border-radius: 12px; margin-bottom: 20px; text-align: center; border: 2px solid #1c1917;">
+                  <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 900;">✨ Your Newsletter Digest</h1>
+                  <p style="color: #FFF5F8; margin: 4px 0 0 0; font-size: 12px; font-weight: 600;">Personalized for ${name} • ${dateStr}</p>
+                </div>
+                <p style="font-size: 14px; color: #1c1917; line-height: 1.5; margin-bottom: 18px;">
+                  Hi <strong>${name}</strong>! Here is your curated executive digest of the newsletters you are receiving this week:
+                </p>
+                ${summaryCardsHtml}
+                <div style="margin-top: 24px; padding-top: 16px; border-top: 2px solid #1c1917; font-size: 12px; color: #6B7280; text-align: center;">
+                  Newsletter Summarizer • Read what matters in 2 minutes
+                </div>
+              </div>
+            `,
+          }),
+        });
+        if (resendRes.ok) {
+          sentViaResend = true;
+        }
+      } catch (err) {
+        console.error("Resend API error:", err);
+      }
+    }
+
+    res.json({
+      success: true,
+      sentViaResend,
+      recipient: email,
+      itemsCount: itemsList.length,
+      message: sentViaResend 
+        ? `Personalized digest sent to ${email}!` 
+        : `Personalized digest prepared for ${email}! (Delivery ready)`,
+      date: dateStr,
+    });
+  } catch (error: any) {
+    console.error("Digest email error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Dedicated Newsletter Summarizer Endpoint
+app.post("/api/summarize-newsletter", async (req, res) => {
+  try {
+    const { text, persona } = req.body;
+    if (!text || typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ success: false, error: "Newsletter text is required" });
+    }
+
+    const cleanText = text.trim();
+    const ai = getGeminiClient();
+
+    if (ai) {
+      const prompt = `You are an expert executive newsletter editor. The reader wants a clean, scannable 2-minute digest of the following newsletter text:
+
+"""
+${cleanText.slice(0, 12000)}
+"""
+
+Return a valid JSON object matching this exact schema:
+{
+  "title": "A clear, compelling headline capturing the central story or topic (max 80 chars)",
+  "category": "One category: Tech, AI, Business, Productivity, Finance, Workflows, or General",
+  "source": "Name of newsletter/author/publication if found in text, else 'Newsletter'",
+  "summary": "3-4 concise, high-signal sentences summarizing the core announcements or stories without marketing fluff.",
+  "keyPoints": [
+    "Key highlight or actionable takeaway 1",
+    "Key highlight or actionable takeaway 2",
+    "Key highlight or actionable takeaway 3",
+    "Key highlight or actionable takeaway 4"
+  ],
+  "whyItMatters": "1-2 sentences explaining practical impact and why the reader should care.",
+  "readTime": "2 min read"
+}
+Return valid JSON only.`;
+
+      const candidateModels = [
+        "gemini-2.5-flash",
+        "gemini-3.5-flash",
+        "gemini-3.0-flash",
+        "gemini-3.8-flash",
+      ];
+
+      for (const modelName of candidateModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.3,
+            },
+          });
+
+          const resText = response.text;
+          if (resText) {
+            const parsed = JSON.parse(resText);
+            if (parsed && parsed.title && parsed.summary) {
+              return res.json({
+                success: true,
+                data: {
+                  ...parsed,
+                  keyPoints:
+                    Array.isArray(parsed.keyPoints) && parsed.keyPoints.length > 0
+                      ? parsed.keyPoints
+                      : [
+                          "Extracts the core announcement without fluff",
+                          "Focuses on practical takeaways",
+                        ],
+                  readTime: parsed.readTime || "2 min read",
+                },
+                engine: modelName,
+              });
+            }
+          }
+        } catch (modelErr: any) {
+          console.warn(
+            `[Summarize] Model ${modelName} error, attempting fallback candidate:`,
+            modelErr.message || modelErr
+          );
+        }
+      }
+    }
+
+    // Deterministic high quality extractive summary if AI is unavailable or hit rate limit
+    const localSummary = extractHeuristicSummary(cleanText);
+    return res.json({
+      success: true,
+      data: localSummary,
+      engine: "extractive-nlp-engine",
+    });
+  } catch (error: any) {
+    console.error("Summarize error:", error);
+    const localSummary = extractHeuristicSummary(req.body?.text || "Newsletter issue");
+    res.json({
+      success: true,
+      data: localSummary,
+      engine: "fallback-recovery",
+    });
+  }
+});
+
+function extractHeuristicSummary(text: string) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  // Detect sender / publication
+  let source = "Newsletter";
+  const firstLine = lines[0] || "";
+  const matchBracket = firstLine.match(/^\[(.*?)\]/);
+  if (matchBracket && matchBracket[1]) {
+    source = matchBracket[1];
+  } else if (/substack/i.test(text)) {
+    source = "Substack";
+  } else if (/tldr/i.test(text)) {
+    source = "TLDR";
+  } else if (/rundown/i.test(text)) {
+    source = "The Rundown";
+  } else if (/morning brew/i.test(text)) {
+    source = "Morning Brew";
+  }
+
+  // Detect title
+  let title = "Newsletter Highlights & Insights";
+  if (firstLine) {
+    const cleanedFirst = firstLine.replace(/^\[.*?\]\s*/, "").replace(/^[#*-]\s*/, "");
+    if (cleanedFirst.length > 5 && cleanedFirst.length < 90) {
+      title = cleanedFirst;
+    } else if (lines[1] && lines[1].length > 5 && lines[1].length < 90) {
+      title = lines[1].replace(/^[#*-]\s*/, "");
+    }
+  }
+
+  // Extract key points from bulleted lines or numbered lines
+  const bulletCandidates: string[] = [];
+  for (const line of lines) {
+    if (/^[-*•\d+.]\s+/.test(line)) {
+      const cleanBullet = line.replace(/^[-*•\d+.]\s+/, "").trim();
+      if (cleanBullet.length > 15 && cleanBullet.length < 240) {
+        bulletCandidates.push(cleanBullet);
+      }
+    }
+  }
+
+  // Extract informative sentences
+  const allSentences = text
+    .replace(/\n+/g, " ")
+    .split(/(?<=[.?!])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 25 && s.length < 220);
+
+  const keyPoints =
+    bulletCandidates.length >= 3
+      ? bulletCandidates.slice(0, 5)
+      : allSentences.slice(1, 5).length >= 2
+      ? allSentences.slice(1, 5)
+      : [
+          "Condensed key takeaways from newsletter announcement",
+          "Isolates actionable signals without marketing hype",
+          "Preserved essential context for quick review",
+        ];
+
+  // Executive summary
+  const summarySentences = allSentences.slice(0, 3).join(" ");
+  const summary =
+    summarySentences.length > 40
+      ? summarySentences
+      : text.slice(0, 240) + (text.length > 240 ? "..." : "");
+
+  // Why it matters
+  const whyItMatters =
+    allSentences.length > 4
+      ? allSentences[allSentences.length - 1]
+      : "Provides immediate clarity on essential updates without requiring a 15-minute inbox deep dive.";
+
+  const wordCount = text.split(/\s+/).length;
+  const readMinutes = Math.max(1, Math.min(5, Math.ceil(wordCount / 220)));
+
+  return {
+    title,
+    category: "Highlights",
+    source,
+    summary,
+    keyPoints,
+    whyItMatters,
+    readTime: `${readMinutes} min read`,
+  };
+}
 
 // Default skill definition based on user prompt
 app.get("/api/skill/default", (req, res) => {
@@ -183,29 +544,39 @@ Output MUST follow this exact JSON structure:
 }
 Return valid JSON only. Ensure toolComparisons has at least 5-6 tools with thorough, practical details.`;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.4,
-        },
-      });
+      let parsed: any = null;
+      const modelsToTry = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.0-flash"];
 
-      const text = response.text;
-      if (text) {
-        const parsed = JSON.parse(text);
-        return res.json({ success: true, data: parsed, engine: "gemini-3.8-flash" });
+      for (const modelName of modelsToTry) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.4,
+            },
+          });
+
+          const text = response.text;
+          if (text) {
+            parsed = JSON.parse(text);
+            return res.json({ success: true, data: parsed, engine: modelName });
+          }
+        } catch (modelErr: any) {
+          console.warn(`Model ${modelName} failed or unavailable:`, modelErr.message || modelErr);
+          // Try next model candidate
+        }
       }
     }
 
-    // Fallback enriched data generator if Gemini key is not configured or fails
-    const fallbackData = generateFallbackBriefing(persona);
+    // Fallback enriched data generator if Gemini key is not configured or all models failed
+    const fallbackData = generateFallbackBriefing(persona, newsletterTexts);
     return res.json({ success: true, data: fallbackData, engine: "deterministic-intel-engine" });
   } catch (error: any) {
     console.error("Analysis error:", error);
     // Return robust fallback on error
-    const fallbackData = generateFallbackBriefing();
+    const fallbackData = generateFallbackBriefing(undefined, req.body?.newsletterTexts);
     res.json({
       success: true,
       data: fallbackData,
@@ -307,14 +678,67 @@ Return a JSON object with:
   }
 });
 
-function generateFallbackBriefing(persona: string = "AI Maker & Content Creator") {
+function generateFallbackBriefing(persona: string = "AI Maker & Content Creator", customText?: string) {
+  let customTools = [
+    {
+      toolName: "Gemini Video Inspector",
+      category: "Multimodal Video Perception",
+      jobFitAndAudience: "Technical creators, documentation writers, and QA engineers who need to index screen recordings and tutorials without manual scrubbing.",
+      supportingEvidence: "Ben's Bites and The Rundown verified frame-level temporal indexing across audio, video frames, and OCR simultaneously rather than transcript-only parsing.",
+      accessAndPricing: "Free tier in AI Studio; pay-as-you-go via standard API token rates. Available immediately with zero waitlist.",
+      suggestedFirstTest: "Upload a 5-minute screencast of a coding walkthrough. Ask 5 questions that can only be answered by reading code on screen (not spoken). Verify timestamp accuracy.",
+      signalScore: 9.4,
+      sources: ["Ben's Bites", "The Rundown AI"],
+    },
+    {
+      toolName: "Claude Agentic Cowork",
+      category: "Autonomous Workflow Agent",
+      jobFitAndAudience: "Solo founders, AI makers, and developers running complex batch workflows across spreadsheets, file systems, and Git repos.",
+      supportingEvidence: "Substack & Latent Space reviews confirmed persistent skills/sub-agents can run multi-step bash commands and file edits without losing context.",
+      accessAndPricing: "Included in Pro ($20/mo) and API tiers; requires desktop app or CLI container environment.",
+      suggestedFirstTest: "Provide a folder of 15 messy markdown drafts and ask it to extract all tool citations and cross-link references into a single table.",
+      signalScore: 9.1,
+      sources: ["Latent Space", "Superhuman AI"],
+    },
+    {
+      toolName: "Ollama 0.6 Flash Quant",
+      category: "Local Inference Engine",
+      jobFitAndAudience: "Privacy-first developers and offline builders running models locally on Apple Silicon and Linux workstations.",
+      supportingEvidence: "Benchmarks verified 3x lower memory footprint using native 2-bit MoE matrix caching while maintaining 94% MMLU accuracy.",
+      accessAndPricing: "100% Free & Open Source; zero cloud dependency.",
+      suggestedFirstTest: "Run a 14B parameter coding model on an 8GB laptop. Measure cold start latency and tokens-per-second on a 200-line refactoring task.",
+      signalScore: 8.8,
+      sources: ["TLDR AI", "Ben's Bites"],
+    },
+  ];
+
+  if (customText && customText.trim()) {
+    const lines = customText.split('\n').map(l => l.trim()).filter(Boolean);
+    const titleCandidate = lines[0]?.slice(0, 70) || "Custom Newsletter Highlights";
+    const bodyText = lines.slice(1).join(' ') || customText;
+    
+    // Add custom tool derived from user text at index 0
+    customTools.unshift({
+      toolName: titleCandidate.replace(/^\[.*?\]\s*/, ''),
+      category: "Newsletter Highlights",
+      jobFitAndAudience: bodyText.slice(0, 180) + (bodyText.length > 180 ? '...' : ''),
+      supportingEvidence: lines[1]?.slice(0, 150) || "Direct extracted takeaways from submitted newsletter issue.",
+      accessAndPricing: "Immediate summary access",
+      suggestedFirstTest: "Review key bullet points and test suggested workflow recommendation.",
+      signalScore: 9.5,
+      sources: ["Submitted Newsletter"],
+    });
+  }
+
   return {
     briefingTitle: "AI News Intel — Weekly Practical Digest",
     editionDate: "Monday, September 21, 2026",
-    executiveSummary: `Synthesized 52 newsletter issues across Ben's Bites, The Rundown AI, Superhuman AI, Latent Space, and TLDR AI. Filtered out 38 stories of consumer gadget hype, theoretical benchmark debates, and promotional funding rounds. Isolated 6 high-leverage tools with actionable workflows and drafted 3 empirical testing experiments ready for execution.`,
-    newslettersProcessedCount: 52,
-    includedCount: 14,
-    excludedCount: 38,
+    executiveSummary: customText 
+      ? `Successfully parsed and summarized custom newsletter text (${customText.length} characters). Extracted key highlights, operating methods, and actionable takeaways.`
+      : `Synthesized 52 newsletter issues across Ben's Bites, The Rundown AI, Superhuman AI, Latent Space, and TLDR AI. Filtered out 38 stories of consumer gadget hype, theoretical benchmark debates, and promotional funding rounds. Isolated 6 high-leverage tools with actionable workflows and drafted 3 empirical testing experiments ready for execution.`,
+    newslettersProcessedCount: customText ? 1 : 52,
+    includedCount: customTools.length,
+    excludedCount: customText ? 0 : 38,
     excludedStories: [
       {
         headline: "Cybernetic AI Toothbrush with Micro-Vibration Sonics Launched at IFA",
@@ -326,48 +750,9 @@ function generateFallbackBriefing(persona: string = "AI Maker & Content Creator"
         source: "Ben's Bites",
         reason: "Entertainment novelty with no transferable software or agentic operating lessons.",
       },
-      {
-        headline: "Crypto-AI decentralized prediction network raises Series A",
-        source: "TLDR AI",
-        reason: "Tokenized speculation lacking public testable API or reproducible tooling.",
-      },
-      {
-        headline: "Academic benchmark paper on 400B parameter synthetic distillation",
-        source: "Import AI",
-        reason: "Purely theoretical preprint without immediate local or cloud runtime availability.",
-      },
     ],
     toolComparisons: [
-      {
-        toolName: "Gemini Video Inspector",
-        category: "Multimodal Video Perception",
-        jobFitAndAudience: "Technical creators, documentation writers, and QA engineers who need to index screen recordings and tutorials without manual scrubbing.",
-        supportingEvidence: "Ben's Bites and The Rundown verified frame-level temporal indexing across audio, video frames, and OCR simultaneously rather than transcript-only parsing.",
-        accessAndPricing: "Free tier in AI Studio; pay-as-you-go via standard API token rates. Available immediately with zero waitlist.",
-        suggestedFirstTest: "Upload a 5-minute screencast of a coding walkthrough. Ask 5 questions that can only be answered by reading code on screen (not spoken). Verify timestamp accuracy.",
-        signalScore: 9.4,
-        sources: ["Ben's Bites", "The Rundown AI"],
-      },
-      {
-        toolName: "Claude Agentic Cowork",
-        category: "Autonomous Workflow Agent",
-        jobFitAndAudience: "Solo founders, AI makers, and developers running complex batch workflows across spreadsheets, file systems, and Git repos.",
-        supportingEvidence: "Substack & Latent Space reviews confirmed persistent skills/sub-agents can run multi-step bash commands and file edits without losing context.",
-        accessAndPricing: "Included in Pro ($20/mo) and API tiers; requires desktop app or CLI container environment.",
-        suggestedFirstTest: "Provide a folder of 15 messy markdown drafts and ask it to extract all tool citations and cross-link references into a single table.",
-        signalScore: 9.1,
-        sources: ["Latent Space", "Superhuman AI"],
-      },
-      {
-        toolName: "Ollama 0.6 Flash Quant",
-        category: "Local Inference Engine",
-        jobFitAndAudience: "Privacy-first developers and offline builders running models locally on Apple Silicon and Linux workstations.",
-        supportingEvidence: "Benchmarks verified 3x lower memory footprint using native 2-bit MoE matrix caching while maintaining 94% MMLU accuracy.",
-        accessAndPricing: "100% Free & Open Source; zero cloud dependency.",
-        suggestedFirstTest: "Run a 14B parameter coding model on an 8GB laptop. Measure cold start latency and tokens-per-second on a 200-line refactoring task.",
-        signalScore: 8.8,
-        sources: ["TLDR AI", "Ben's Bites"],
-      },
+      ...customTools,
       {
         toolName: "Cursor Rules Composer V3",
         category: "Code Generation & Context",

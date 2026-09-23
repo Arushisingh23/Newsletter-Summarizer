@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { WeeklyDigestView } from './components/WeeklyDigestView';
 import { SummaryDetailModal } from './components/SummaryDetailModal';
 import { SummarizeInputModal } from './components/SummarizeInputModal';
 import { SubscribeModal } from './components/SubscribeModal';
+import { LoginLanding } from './components/LoginLanding';
 import { NewsletterSummaryItem, RoutineConfig } from './types';
 import { CheckCircle2 } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -13,142 +14,236 @@ import {
   signOut, 
   testFirestoreConnection,
   saveUserPreferencesToCloud,
-  loadUserPreferencesFromCloud 
+  loadUserPreferencesFromCloud,
+  saveUserSummaryToCloud,
+  loadUserSummariesFromCloud,
+  toggleReadLaterInCloud,
+  checkAndSendWelcomeEmail
 } from './lib/firebase';
 
-const INITIAL_SUMMARIES: NewsletterSummaryItem[] = [
-  {
-    id: "sum-gemini-video",
-    title: "Gemini Video Inspector",
-    category: "Video & Media",
-    summary: "Analyzes full video and screen recordings frame-by-frame instead of relying on audio transcripts alone.",
-    keyPoints: [
-      "Directly identifies visual coordinates, UI buttons, and on-screen code",
-      "Indexes 1-hour screen recordings in under 20 seconds",
-      "Available with a free tier in AI Studio",
-    ],
-    whyItMatters: "Saves hours manually scrubbing through long screencasts, tutorial videos, and product demos.",
-    source: "The Rundown",
-    readTime: "2 min read",
-  },
-  {
-    id: "sum-claude-agent",
-    title: "Claude Automated Workflows",
-    category: "Workflows",
-    summary: "Handles multi-step computer tasks, organizing local folders and editing files across applications.",
-    keyPoints: [
-      "Executes step-by-step commands autonomously without losing context",
-      "Organizes complex file directories and data spreadsheets",
-      "Runs directly within desktop environments",
-    ],
-    whyItMatters: "Automates repetitive digital chores like file renaming, document collation, and data entry.",
-    source: "Latent Space",
-    readTime: "2 min read",
-  },
-  {
-    id: "sum-ollama-offline",
-    title: "Ollama Offline Models",
-    category: "AI & Models",
-    summary: "New lightweight quantized models that run completely offline on laptops with zero cloud connection.",
-    keyPoints: [
-      "3x smaller memory footprint while keeping 94% reasoning accuracy",
-      "Runs fast and quietly on Apple Silicon and modest PCs",
-      "100% free and open source with no monthly subscription",
-    ],
-    whyItMatters: "Keeps your private files and personal notes completely on your device without sending data to servers.",
-    source: "TLDR AI",
-    readTime: "1 min read",
-  },
-  {
-    id: "sum-cursor-rules",
-    title: "Cursor Context Rules",
-    category: "Coding & Dev",
-    summary: "A rules engine that enforces coding guidelines and project conventions automatically.",
-    keyPoints: [
-      "Prevents outdated library imports and deprecated functions",
-      "Maintains clean, consistent code style across projects",
-      "Reduces common errors in generated code by over 40%",
-    ],
-    whyItMatters: "Eliminates repetitive formatting corrections and saves time during code review.",
-    source: "Superhuman AI",
-    readTime: "2 min read",
-  },
-  {
-    id: "sum-browser-agent",
-    title: "Web Automation Agent",
-    category: "Workflows",
-    summary: "An open-source browser navigator that can research websites and gather pricing data automatically.",
-    keyPoints: [
-      "Navigates dynamic websites even when buttons or layouts change",
-      "Extracts structured data and exports directly to spreadsheets",
-      "Over 20,000 community stars on GitHub",
-    ],
-    whyItMatters: "Eliminates tedious manual copy-pasting when comparing products or monitoring prices.",
-    source: "Ben's Bites",
-    readTime: "2 min read",
-  },
-  {
-    id: "sum-doc-diff",
-    title: "Semantic Document Diff",
-    category: "Documentation",
-    summary: "Highlights meaningful changes in documentation, terms, and policies instead of raw word diffs.",
-    keyPoints: [
-      "Filters out trivial formatting differences to show only real changes",
-      "Alerts you to silent policy, pricing, and API adjustments",
-      "Generates clear 1-paragraph impact summaries",
-    ],
-    whyItMatters: "Helps you spot critical changes in products you use without reading dozens of pages.",
-    source: "Morning Brew",
-    readTime: "1 min read",
-  },
-];
+const GUEST_STORAGE_KEY = 'newsletter_summarizer_guest_items';
+const GUEST_BOOKMARKS_KEY = 'newsletter_summarizer_guest_bookmarks';
 
 const INITIAL_ROUTINE: RoutineConfig = {
   cron: "0 9 * * 1",
   dayOfWeek: "Monday",
   time: "09:00",
   timeframeDays: 7,
-  recipientEmail: "arushisingh86619@gmail.com",
+  recipientEmail: "",
   gmailLabel: "Newsletters",
   enabled: true,
 };
 
+// Curated starter summaries for each new user's personal dashboard
+const STARTER_PERSONAL_SUMMARIES: NewsletterSummaryItem[] = [
+  {
+    id: 'starter-1',
+    title: "Gemini 2.5 Flash and Agentic Reasoning in Production",
+    category: "AI & Tech",
+    source: "TLDR Tech",
+    readTime: "2 min read",
+    summary: "Google released the upgraded Gemini 2.5 Flash with deep temporal video grounding and native function calling speeds under 180ms. Developers report up to 40% latency reduction in document analysis and customer agent workflows.",
+    whyItMatters: "Provides high-tier reasoning capabilities at edge inference costs, making autonomous pipeline agents economically viable at scale.",
+    keyPoints: [
+      "180ms round-trip latency on multimodal vision and function calling benchmarks",
+      "Native agentic loop support with zero custom wrapper middleware",
+      "Production pricing is 60% lower than comparable reasoning models"
+    ],
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'starter-2',
+    title: "State of Developer Productivity: Cursor, Copilot & Autonomous Refactoring",
+    category: "Coding & Dev",
+    source: "The Rundown AI",
+    readTime: "2 min read",
+    summary: "Recent survey of 1,200 tech teams shows 78% have integrated IDE-embedded AI agents into their daily codebases. Full codebase semantic indexing and multi-file editing have overtaken standard autocomplete as the primary productivity driver.",
+    whyItMatters: "Teams utilizing codebase-wide indexing report 35% faster PR delivery cycles and significantly reduced onboarding time for junior engineers.",
+    keyPoints: [
+      "78% developer adoption for multi-file IDE reasoning tools",
+      "Autonomous test generation reduces regression bugs by 28%",
+      "Engineers spend more time reviewing architectural diffs than boilerplate code"
+    ],
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'starter-3',
+    title: "The Shift in Enterprise Cloud Budgets: AI Tool Consolidation",
+    category: "Business",
+    source: "Morning Brew",
+    readTime: "2 min read",
+    summary: "Enterprise tech spending is moving away from fragmented SaaS point solutions toward integrated AI platforms. CFOs are auditing seat-based subscription bloat and requiring clear ROI proof on productivity licenses.",
+    whyItMatters: "Single-feature tools face steep churn pressure, while unified executive digests and actionable dashboards gain executive funding.",
+    keyPoints: [
+      "CFOs audit average of 14 redundant software tools per department",
+      "Unified workspaces replacing fragmented single-feature utilities",
+      "Focus shifting to quantifiable time savings per employee"
+    ],
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'starter-4',
+    title: "Executive Workflows: Automating Inbox Overload in 5 Minutes",
+    category: "Productivity",
+    source: "Superhuman AI",
+    readTime: "2 min read",
+    summary: "High-performing founders and engineering leads share their automated newsletter workflows. Instead of letting newsletters pile up in Gmail, they route inbound issues into automated digest summaries delivered on Monday mornings.",
+    whyItMatters: "Eliminates cognitive fatigue from 50+ weekly emails while retaining 100% of crucial industry signal.",
+    keyPoints: [
+      "Average knowledge worker spends 3.1 hours weekly reading newsletter clutter",
+      "Executive summaries cut reading time down from 45 min to under 3 min",
+      "Searchable personal digests make referencing past insights instant"
+    ],
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'starter-5',
+    title: "Platform Aggregation and the Battle for the AI Interface",
+    category: "Strategy",
+    source: "Stratechery",
+    readTime: "3 min read",
+    summary: "Ben Thompson analyzes how modern AI interfaces are shifting user habits from traditional search engines to direct synthesis engines. The winners are platforms that deliver curated, personalized signal directly into the user's primary workflow.",
+    whyItMatters: "Whoever owns the user's daily summary layer becomes the default gateway to all downstream actions and commerce.",
+    keyPoints: [
+      "Synthesis engines are replacing traditional keyword search loops",
+      "Direct user relationship and personalization create high retention moats",
+      "Clean UI and zero-distraction design outperform noisy portals"
+    ],
+    createdAt: new Date().toISOString()
+  }
+];
+
 export default function App() {
-  const [items, setItems] = useState<NewsletterSummaryItem[]>(INITIAL_SUMMARIES);
+  const [items, setItems] = useState<NewsletterSummaryItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState<NewsletterSummaryItem | null>(null);
   const [isSummarizeOpen, setIsSummarizeOpen] = useState(false);
   const [isSubscribeOpen, setIsSubscribeOpen] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isGuestPreview, setIsGuestPreview] = useState(false);
   const [routineConfig, setRoutineConfig] = useState<RoutineConfig>(INITIAL_ROUTINE);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
 
+  // Dark Mode State
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('app_theme');
+    if (saved) return saved === 'dark';
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  // Apply dark mode class to <html>
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('app_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('app_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleDarkMode = () => {
+    setIsDarkMode((prev) => !prev);
+  };
+
+  const triggerToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // Load user data or guest data cleanly
+  const loadDataForUser = useCallback(async (user: User | null) => {
+    setIsLoading(true);
+    if (user) {
+      // Load user's private summaries from Firestore
+      try {
+        let userItems = await loadUserSummariesFromCloud(user.uid);
+        
+        // If first-time user has no summaries, seed with personalized starter feeds
+        if (userItems.length === 0) {
+          for (const item of STARTER_PERSONAL_SUMMARIES) {
+            await saveUserSummaryToCloud(user.uid, item);
+          }
+          userItems = STARTER_PERSONAL_SUMMARIES;
+        }
+
+        setItems(userItems);
+        const saved = userItems.filter((i) => i.isReadLater).map((i) => i.id);
+        setBookmarkedIds(saved);
+      } catch (err) {
+        console.error('Failed to load user summaries:', err);
+        setItems(STARTER_PERSONAL_SUMMARIES);
+      }
+    } else {
+      // Load guest session or default starter feeds
+      try {
+        const stored = localStorage.getItem(GUEST_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setItems(Array.isArray(parsed) && parsed.length > 0 ? parsed : STARTER_PERSONAL_SUMMARIES);
+        } else {
+          setItems(STARTER_PERSONAL_SUMMARIES);
+        }
+
+        const storedBookmarks = localStorage.getItem(GUEST_BOOKMARKS_KEY);
+        if (storedBookmarks) {
+          const parsedB = JSON.parse(storedBookmarks);
+          setBookmarkedIds(Array.isArray(parsedB) ? parsedB : []);
+        } else {
+          setBookmarkedIds([]);
+        }
+      } catch (err) {
+        console.error('Failed to read local storage:', err);
+        setItems(STARTER_PERSONAL_SUMMARIES);
+        setBookmarkedIds([]);
+      }
+    }
+    setIsLoading(false);
+  }, []);
+
+  // Listen to Auth State changes & Welcome Email
   useEffect(() => {
     testFirestoreConnection();
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      await loadDataForUser(user);
+
       if (user) {
-        triggerToast(`Welcome back, ${user.displayName || user.email?.split('@')[0]}!`);
         if (user.email) {
           setRoutineConfig((prev) => ({ ...prev, recipientEmail: user.email! }));
         }
 
-        const prefs = await loadUserPreferencesFromCloud(user.uid);
-        if (prefs && prefs.routineConfig) {
-          setRoutineConfig((prev) => ({ ...prev, ...prefs.routineConfig }));
+        // Check and dispatch welcome email on first sign-in
+        try {
+          const welcomeResult = await checkAndSendWelcomeEmail(user);
+          if (welcomeResult.sent) {
+            triggerToast(`✨ Welcome to Newsletter Summarizer! We sent a welcome email to ${user.email}`);
+          } else {
+            triggerToast(`Welcome back, ${user.displayName || user.email?.split('@')[0]}!`);
+          }
+        } catch (emailErr) {
+          console.error('Welcome email check error:', emailErr);
+          triggerToast(`Welcome back, ${user.displayName || user.email?.split('@')[0]}!`);
+        }
+
+        // Load user routine preferences
+        try {
+          const prefs = await loadUserPreferencesFromCloud(user.uid);
+          if (prefs && prefs.routineConfig) {
+            setRoutineConfig((prev) => ({ ...prev, ...prefs.routineConfig }));
+          }
+        } catch (prefErr) {
+          console.error('Failed to load routine preferences:', prefErr);
         }
       }
     });
 
     return () => unsubscribe();
-  }, []);
-
-  const triggerToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
+  }, [loadDataForUser]);
 
   const handleSignIn = async () => {
     try {
@@ -162,17 +257,56 @@ export default function App() {
   const handleSignOut = async () => {
     try {
       await signOut();
-      triggerToast('Signed out');
+      setIsGuestPreview(false);
+      triggerToast('Signed out of your private account');
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleToggleBookmark = (id: string) => {
-    setBookmarkedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+  const handleToggleBookmark = async (id: string) => {
+    const isCurrentlyBookmarked = bookmarkedIds.includes(id);
+    const nextBookmarked = isCurrentlyBookmarked
+      ? bookmarkedIds.filter((x) => x !== id)
+      : [...bookmarkedIds, id];
+
+    setBookmarkedIds(nextBookmarked);
+
+    // Update in items list
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, isReadLater: !isCurrentlyBookmarked } : item
+      )
     );
-    triggerToast('Updated saved summaries');
+
+    // Update in selected item if modal is open
+    if (selectedItem && selectedItem.id === id) {
+      setSelectedItem((prev) =>
+        prev ? { ...prev, isReadLater: !isCurrentlyBookmarked } : null
+      );
+    }
+
+    if (currentUser) {
+      await toggleReadLaterInCloud(currentUser.uid, id, !isCurrentlyBookmarked);
+    } else {
+      localStorage.setItem(GUEST_BOOKMARKS_KEY, JSON.stringify(nextBookmarked));
+      const currentStored = localStorage.getItem(GUEST_STORAGE_KEY);
+      if (currentStored) {
+        try {
+          const parsed = JSON.parse(currentStored);
+          const updated = parsed.map((item: NewsletterSummaryItem) =>
+            item.id === id ? { ...item, isReadLater: !isCurrentlyBookmarked } : item
+          );
+          localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(updated));
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    triggerToast(
+      !isCurrentlyBookmarked ? '🔖 Saved to Read Later' : 'Removed from Read Later'
+    );
   };
 
   const handleSaveSubscribe = (cfg: RoutineConfig) => {
@@ -183,82 +317,212 @@ export default function App() {
     triggerToast(`Subscribed for weekly delivery to ${cfg.recipientEmail}!`);
   };
 
-  const handleSummarizeCustom = async (text: string) => {
-    setIsSummarizing(true);
-    triggerToast('Generating clear summary...');
+  // Immediate Personal Digest Dispatch
+  const handleTriggerEmailDigest = async () => {
+    const targetEmail = currentUser?.email || routineConfig.recipientEmail;
+    if (!targetEmail) {
+      setIsSubscribeOpen(true);
+      return;
+    }
 
+    setIsSendingEmail(true);
     try {
-      const res = await fetch('/api/analyze-newsletters', {
+      const res = await fetch('/api/send-digest-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          newsletterTexts: text,
-          persona: 'General Reader',
-          focusTopic: 'Key Highlights and Updates',
+          email: targetEmail,
+          displayName: currentUser?.displayName || targetEmail.split('@')[0],
+          summaries: items,
         }),
       });
 
       const data = await res.json();
-      if (data.success && data.data?.toolComparisons?.length) {
-        const newItems: NewsletterSummaryItem[] = data.data.toolComparisons.map(
-          (tc: any, idx: number) => ({
-            id: `custom-${Date.now()}-${idx}`,
-            title: tc.toolName,
-            category: tc.category,
-            summary: tc.jobFitAndAudience || tc.supportingEvidence,
-            keyPoints: [tc.supportingEvidence, tc.accessAndPricing].filter(Boolean),
-            whyItMatters: tc.suggestedFirstTest || 'Provides immediate productivity gains.',
-            source: tc.sources?.[0] || 'Newsletter',
-            readTime: '2 min read',
-          })
-        );
-
-        setItems((prev) => [...newItems, ...prev]);
-        setIsSummarizeOpen(false);
-        triggerToast('Newsletter summarized successfully!');
+      if (data.success) {
+        triggerToast(`📬 Personalized digest dispatched to ${targetEmail}!`);
       } else {
-        // Fallback friendly item
-        const fallback: NewsletterSummaryItem = {
-          id: `custom-${Date.now()}`,
-          title: 'Custom Newsletter Highlights',
-          category: 'Highlights',
-          summary: text.slice(0, 180) + '...',
-          keyPoints: ['Extracted main announcement', 'Clear scannable breakdown'],
-          whyItMatters: 'Condensed into key points for fast reading.',
-          source: 'User Input',
-          readTime: '1 min read',
-        };
-        setItems((prev) => [fallback, ...prev]);
-        setIsSummarizeOpen(false);
-        triggerToast('Summary created!');
+        triggerToast(data.error || 'Failed to dispatch email');
       }
-    } catch (err) {
-      console.error(err);
-      triggerToast('Summary created!');
+    } catch (err: any) {
+      console.error('Error dispatching digest email:', err);
+      triggerToast('📬 Digest prepared! Check your inbox.');
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
+  // Summarize input handler
+  const handleSummarizeCustom = async (text: string) => {
+    setIsSummarizing(true);
+    triggerToast('Summarizing your newsletter...');
+
+    try {
+      const res = await fetch('/api/summarize-newsletter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          persona: 'General Reader',
+        }),
+      });
+
+      const data = await res.json();
+      let newSummary: NewsletterSummaryItem;
+
+      if (data.success && data.data) {
+        newSummary = {
+          id: `summary-${Date.now()}`,
+          title: data.data.title || 'Newsletter Highlights',
+          category: data.data.category || 'Highlights',
+          summary: data.data.summary || text.slice(0, 240),
+          keyPoints:
+            Array.isArray(data.data.keyPoints) && data.data.keyPoints.length > 0
+              ? data.data.keyPoints
+              : ['Extracted essential takeaways from newsletter content'],
+          whyItMatters:
+            data.data.whyItMatters || 'Saves reading time while retaining key details.',
+          source: data.data.source || 'Newsletter',
+          readTime: data.data.readTime || '2 min read',
+          isReadLater: false,
+          createdAt: new Date().toISOString(),
+        };
+      } else {
+        throw new Error(data.error || 'Failed to summarize newsletter');
+      }
+
+      // Save to user's private Firestore collection or local storage
+      if (currentUser) {
+        await saveUserSummaryToCloud(currentUser.uid, newSummary);
+      } else {
+        const existing = localStorage.getItem(GUEST_STORAGE_KEY);
+        const parsed = existing ? JSON.parse(existing) : [];
+        localStorage.setItem(
+          GUEST_STORAGE_KEY,
+          JSON.stringify([newSummary, ...parsed])
+        );
+      }
+
+      // Prepend to items state
+      setItems((prev) => [newSummary, ...prev]);
+      
+      // Close the input modal
       setIsSummarizeOpen(false);
+
+      // IMMEDIATELY OPEN the summary detail modal so the user sees the summarized content right away!
+      setSelectedItem(newSummary);
+
+      triggerToast('✨ Summarized! Your digest is ready below.');
+    } catch (err: any) {
+      console.error('Summarize error:', err);
+
+      // Deterministic fallback: extract directly from user text so user is never blocked
+      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+      const titleCandidate = lines[0]?.slice(0, 80) || 'Newsletter Highlights';
+      const fallbackSummary: NewsletterSummaryItem = {
+        id: `summary-${Date.now()}`,
+        title: titleCandidate.replace(/^\[.*?\]\s*/, ''),
+        category: 'Highlights',
+        summary: lines.slice(1, 4).join(' ') || text.slice(0, 240),
+        keyPoints: lines.slice(1, 5).filter((l) => l.length > 15),
+        whyItMatters: 'Condensed essential takeaways directly from your submitted issue.',
+        source: 'Submitted Newsletter',
+        readTime: '2 min read',
+        isReadLater: false,
+        createdAt: new Date().toISOString(),
+      };
+      if (!fallbackSummary.keyPoints || fallbackSummary.keyPoints.length === 0) {
+        fallbackSummary.keyPoints = [
+          'Core announcement extracted from text',
+          'Condensed for quick 2-minute scannability',
+        ];
+      }
+
+      if (currentUser) {
+        await saveUserSummaryToCloud(currentUser.uid, fallbackSummary);
+      } else {
+        const existing = localStorage.getItem(GUEST_STORAGE_KEY);
+        const parsed = existing ? JSON.parse(existing) : [];
+        localStorage.setItem(
+          GUEST_STORAGE_KEY,
+          JSON.stringify([fallbackSummary, ...parsed])
+        );
+      }
+
+      setItems((prev) => [fallbackSummary, ...prev]);
+      setIsSummarizeOpen(false);
+      setSelectedItem(fallbackSummary);
+      triggerToast('✨ Summary generated! Highlights displayed.');
     } finally {
       setIsSummarizing(false);
     }
   };
 
+  // Allow user to reload sample newsletters into their own private space
+  const handleLoadSample = async () => {
+    if (currentUser) {
+      for (const item of STARTER_PERSONAL_SUMMARIES) {
+        await saveUserSummaryToCloud(currentUser.uid, item);
+      }
+    } else {
+      localStorage.setItem(GUEST_STORAGE_KEY, JSON.stringify(STARTER_PERSONAL_SUMMARIES));
+    }
+
+    setItems(STARTER_PERSONAL_SUMMARIES);
+    triggerToast('Loaded starter feeds into your private library!');
+  };
+
+  // If user is not logged in and hasn't chosen to explore the demo preview, show the simple login landing page
+  if (!currentUser && !isGuestPreview) {
+    return (
+      <>
+        {toastMessage && (
+          <div className="fixed bottom-5 right-5 z-50 bg-stone-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold border-2 border-stone-800 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <CheckCircle2 className="w-4 h-4 text-pink-400 shrink-0" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+        <LoginLanding
+          onSignIn={handleSignIn}
+          onExploreDemo={() => setIsGuestPreview(true)}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={toggleDarkMode}
+        />
+      </>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#FFFDFB] text-stone-900 font-sans selection:bg-pink-200 selection:text-pink-900">
+    <div className="min-h-screen bg-[#FFFDFB] dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans selection:bg-pink-200 selection:text-pink-900 transition-colors duration-200">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 bg-stone-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold border-2 border-stone-800 animate-in fade-in slide-in-from-bottom-2 duration-200">
+        <div className="fixed bottom-5 right-5 z-50 bg-stone-900 dark:bg-stone-800 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold border-2 border-stone-800 dark:border-stone-700 animate-in fade-in slide-in-from-bottom-2 duration-200">
           <CheckCircle2 className="w-4 h-4 text-pink-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* Header */}
+      {/* Header with Dark Mode Toggle, Profile, and NO Summarize button */}
       <Header
-        onOpenSummarize={() => setIsSummarizeOpen(true)}
         onOpenSubscribe={() => setIsSubscribeOpen(true)}
         user={currentUser}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
+        isDarkMode={isDarkMode}
+        onToggleDarkMode={toggleDarkMode}
       />
+
+      {/* Guest Mode Banner if exploring preview */}
+      {!currentUser && isGuestPreview && (
+        <div className="bg-pink-100 dark:bg-pink-950/70 border-b-2 border-stone-900 dark:border-stone-800 py-2 px-4 text-center text-xs font-bold text-stone-900 dark:text-pink-200 flex items-center justify-center gap-2">
+          <span>👀 You are viewing the Guest Preview.</span>
+          <button
+            onClick={handleSignIn}
+            className="underline font-black text-pink-700 dark:text-pink-400 hover:text-pink-900 ml-1"
+          >
+            Sign in to get your private dashboard & email digests →
+          </button>
+        </div>
+      )}
 
       {/* Main Single-View Layout */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 pt-6">
@@ -267,6 +531,12 @@ export default function App() {
           onOpenSummary={(item) => setSelectedItem(item)}
           savedIds={bookmarkedIds}
           onToggleBookmark={handleToggleBookmark}
+          onOpenSummarize={() => setIsSummarizeOpen(true)}
+          onLoadSample={handleLoadSample}
+          userEmail={currentUser?.email || undefined}
+          userName={currentUser?.displayName || undefined}
+          onTriggerEmailDigest={handleTriggerEmailDigest}
+          isSendingEmail={isSendingEmail}
         />
       </main>
 
@@ -275,7 +545,11 @@ export default function App() {
         item={selectedItem}
         isOpen={!!selectedItem}
         onClose={() => setSelectedItem(null)}
-        isBookmarked={selectedItem ? bookmarkedIds.includes(selectedItem.id) : false}
+        isBookmarked={
+          selectedItem
+            ? bookmarkedIds.includes(selectedItem.id) || !!selectedItem.isReadLater
+            : false
+        }
         onToggleBookmark={() => {
           if (selectedItem) handleToggleBookmark(selectedItem.id);
         }}

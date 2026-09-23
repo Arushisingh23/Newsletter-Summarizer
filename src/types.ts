@@ -8,6 +8,8 @@ export interface NewsletterSummaryItem {
   readTime: string;
   keyPoints?: string[];
   link?: string;
+  isReadLater?: boolean;
+  createdAt?: string;
 }
 
 export interface ToolComparison {
@@ -99,4 +101,17 @@ export interface NewsletterItem {
   filterReason?: string;
   snippet: string;
   fullContent?: string;
+}
+
+export interface NewsletterSubscription {
+  id: string;
+  name: string;
+  sender: string;
+  category: string;
+  frequency: 'Daily' | 'Weekly' | 'Bi-weekly';
+  status: 'active' | 'paused';
+  lastReceived: string;
+  unreadCount: number;
+  description: string;
+  icon?: string;
 }

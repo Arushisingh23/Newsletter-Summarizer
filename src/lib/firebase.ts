@@ -12,12 +12,13 @@ import {
   doc, 
   setDoc, 
   getDoc, 
+  deleteDoc,
   collection, 
   getDocs, 
   getDocFromServer 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { RoutineConfig, ExperimentIdea } from '../types';
+import { RoutineConfig, ExperimentIdea, NewsletterSummaryItem } from '../types';
 
 // Initialize Firebase App
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -185,5 +186,145 @@ export async function loadUserExperimentsFromCloud(
   } catch (err) {
     console.error('Failed to load experiments from cloud:', err);
     return [];
+  }
+}
+
+// User Private Newsletter Summaries persistence
+export async function saveUserSummaryToCloud(
+  userId: string,
+  item: NewsletterSummaryItem
+): Promise<void> {
+  try {
+    const summaryRef = doc(db, 'users', userId, 'summaries', item.id);
+    await setDoc(
+      summaryRef,
+      {
+        userId,
+        id: item.id,
+        title: item.title,
+        category: item.category || 'General',
+        summary: item.summary,
+        whyItMatters: item.whyItMatters || '',
+        source: item.source || 'Newsletter',
+        readTime: item.readTime || '2 min read',
+        keyPoints: item.keyPoints || [],
+        isReadLater: !!item.isReadLater,
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.error('Failed to save newsletter summary to cloud:', err);
+  }
+}
+
+export async function deleteUserSummaryFromCloud(
+  userId: string,
+  summaryId: string
+): Promise<void> {
+  try {
+    const summaryRef = doc(db, 'users', userId, 'summaries', summaryId);
+    await deleteDoc(summaryRef);
+  } catch (err) {
+    console.error('Failed to delete newsletter summary from cloud:', err);
+  }
+}
+
+export async function loadUserSummariesFromCloud(
+  userId: string
+): Promise<NewsletterSummaryItem[]> {
+  try {
+    const colRef = collection(db, 'users', userId, 'summaries');
+    const snap = await getDocs(colRef);
+    const summaries: NewsletterSummaryItem[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      summaries.push({
+        id: d.id,
+        title: data.title || 'Untitled Summary',
+        category: data.category || 'General',
+        summary: data.summary || '',
+        whyItMatters: data.whyItMatters || '',
+        source: data.source || 'Newsletter',
+        readTime: data.readTime || '2 min read',
+        keyPoints: data.keyPoints || [],
+        isReadLater: !!data.isReadLater,
+        createdAt: data.createdAt,
+      });
+    });
+
+    // Sort newest first
+    summaries.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return summaries;
+  } catch (err) {
+    console.error('Failed to load user summaries from cloud:', err);
+    return [];
+  }
+}
+
+export async function toggleReadLaterInCloud(
+  userId: string,
+  summaryId: string,
+  isReadLater: boolean
+): Promise<void> {
+  try {
+    const summaryRef = doc(db, 'users', userId, 'summaries', summaryId);
+    await setDoc(summaryRef, { isReadLater }, { merge: true });
+  } catch (err) {
+    console.error('Failed to update read later in cloud:', err);
+  }
+}
+
+// Check and trigger welcome email upon sign-in
+export async function checkAndSendWelcomeEmail(
+  user: User
+): Promise<{ sent: boolean; message: string }> {
+  try {
+    if (!user || !user.email) return { sent: false, message: 'No email found' };
+
+    const userRef = doc(db, 'users', user.uid);
+    const snap = await getDoc(userRef);
+    const data = snap.data();
+
+    // If already sent, do not send again
+    if (data?.welcomeEmailSent) {
+      return { sent: false, message: 'Welcome email previously sent' };
+    }
+
+    // Call server to dispatch welcome email
+    const res = await fetch('/api/send-welcome-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: user.email,
+        displayName: user.displayName || '',
+      }),
+    });
+
+    const result = await res.json();
+
+    // Mark as sent in Firestore
+    await setDoc(
+      userRef,
+      {
+        welcomeEmailSent: true,
+        welcomeEmailSentAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    return {
+      sent: true,
+      message: result.message || `Welcome email sent to ${user.email}`,
+    };
+  } catch (err) {
+    console.error('Welcome email dispatch error:', err);
+    return { sent: false, message: 'Error sending welcome email' };
   }
 }

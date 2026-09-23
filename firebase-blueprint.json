@@ -127,6 +127,54 @@
         }
       },
       "required": ["userId", "title", "coreQuestion", "testProtocol"]
+    },
+    "UserNewsletterSummary": {
+      "title": "UserNewsletterSummary",
+      "description": "A summarized newsletter story private to the user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the summarized newsletter story."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category or topic tag."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Core condensed summary text."
+        },
+        "whyItMatters": {
+          "type": "string",
+          "description": "Practical takeaway and why it matters."
+        },
+        "source": {
+          "type": "string",
+          "description": "Newsletter or publication source name."
+        },
+        "readTime": {
+          "type": "string",
+          "description": "Estimated read duration (e.g. 2 min read)."
+        },
+        "keyPoints": {
+          "type": "array",
+          "description": "Bulleted key highlight takeaways."
+        },
+        "isReadLater": {
+          "type": "boolean",
+          "description": "Whether bookmarked for reading later."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation."
+        }
+      },
+      "required": ["userId", "title", "summary"]
     }
   },
   "firestore": {
@@ -141,6 +189,10 @@
     "/users/{userId}/experiments/{experimentId}": {
       "schema": "UserExperiment",
       "description": "Empirical research and testing experiments for the user."
+    },
+    "/users/{userId}/summaries/{summaryId}": {
+      "schema": "UserNewsletterSummary",
+      "description": "User's private newsletter summaries."
     }
   }
 }
