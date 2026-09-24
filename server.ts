@@ -207,6 +207,34 @@ app.post("/api/send-digest-email", async (req, res) => {
   }
 });
 
+// Helper to extract clean plain text from Gmail payload
+function extractEmailText(payload: any): string {
+  if (!payload) return "";
+  if (payload.body?.data) {
+    try {
+      const decoded = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+      return decoded.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    } catch (e) {}
+  }
+  if (Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        try {
+          const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+          return decoded.replace(/\s+/g, ' ').trim().slice(0, 2000);
+        } catch (e) {}
+      }
+      if (part.mimeType === "text/html" && part.body?.data) {
+        try {
+          const decoded = Buffer.from(part.body.data, 'base64').toString('utf-8');
+          return decoded.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+        } catch (e) {}
+      }
+    }
+  }
+  return "";
+}
+
 // Fetch incoming newsletters received on the user's mail ID from their Gmail inbox
 app.post("/api/fetch-inbox-newsletters", async (req, res) => {
   try {
@@ -217,83 +245,125 @@ app.post("/api/fetch-inbox-newsletters", async (req, res) => {
 
     console.log(`[INBOX] Scanning incoming newsletters for user: ${userEmail}`);
 
+    if (!accessToken) {
+      return res.json({
+        success: false,
+        needsAuth: true,
+        code: "GMAIL_PERMISSION_REQUIRED",
+        message: "Gmail permission needed to scan your inbox. Click 'Connect Gmail' to grant access.",
+        summaries: [],
+      });
+    }
+
     const extractedSummaries: any[] = [];
 
-    // If Google OAuth access token is provided, query the Gmail API for user's actual incoming newsletters
-    if (accessToken) {
-      try {
-        const query = encodeURIComponent('category:updates OR category:promotions OR "unsubscribe" OR label:newsletters');
-        const listRes = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=6`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        if (listRes.ok) {
-          const listData = await listRes.json();
-          const messages = listData.messages || [];
-
-          for (const msg of messages) {
-            try {
-              const msgRes = await fetch(
-                `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
-                {
-                  headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    "Content-Type": "application/json",
-                  },
-                }
-              );
-
-              if (msgRes.ok) {
-                const msgData = await msgRes.json();
-                const headers = msgData.payload?.headers || [];
-                const subjectHeader = headers.find((h: any) => h.name.toLowerCase() === "subject");
-                const fromHeader = headers.find((h: any) => h.name.toLowerCase() === "from");
-                const dateHeader = headers.find((h: any) => h.name.toLowerCase() === "date");
-
-                const rawSubject = subjectHeader ? subjectHeader.value : "Newsletter Update";
-                const rawFrom = fromHeader ? fromHeader.value : "Newsletter";
-                const snippet = msgData.snippet || "";
-
-                // Parse sender name
-                let senderName = rawFrom;
-                const matchName = rawFrom.match(/^(.*?)(?:<.*?>)?$/);
-                if (matchName && matchName[1].trim()) {
-                  senderName = matchName[1].replace(/["']/g, "").trim();
-                }
-
-                // Summarize the user's specific email text
-                const textToSummarize = `Newsletter: ${senderName}\nSubject: ${rawSubject}\n\n${snippet}`;
-                const summaryObj = extractHeuristicSummary(textToSummarize);
-
-                extractedSummaries.push({
-                  id: `gmail-${msg.id}`,
-                  title: rawSubject,
-                  category: summaryObj.category || "Tech & AI",
-                  summary: summaryObj.summary || snippet,
-                  whyItMatters: summaryObj.whyItMatters || `Directly relevant to communications received on ${userEmail}.`,
-                  source: senderName,
-                  readTime: "2 min read",
-                  keyPoints: summaryObj.keyPoints || [snippet.slice(0, 80)],
-                  isReadLater: false,
-                  createdAt: dateHeader?.value ? new Date(dateHeader.value).toISOString() : new Date().toISOString(),
-                });
-              }
-            } catch (msgErr) {
-              console.warn("Failed to fetch individual message:", msgErr);
-            }
-          }
-        } else {
-          console.warn("Gmail API query returned non-OK status:", listRes.status);
+    // Query Gmail API for user's actual incoming newsletters
+    try {
+      const query = encodeURIComponent('category:updates OR category:promotions OR "unsubscribe" OR substack OR medium OR beehiiv OR subject:newsletter OR subject:digest OR label:newsletters');
+      const listRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=10`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
         }
-      } catch (gmailErr) {
-        console.error("Gmail fetch error:", gmailErr);
+      );
+
+      if (!listRes.ok) {
+        const errJson = await listRes.json().catch(() => ({}));
+        const errMsg = errJson?.error?.message || `Gmail API returned HTTP ${listRes.status}`;
+        console.warn("Gmail API query returned non-OK status:", listRes.status, errMsg);
+
+        if (listRes.status === 401) {
+          return res.json({
+            success: false,
+            needsAuth: true,
+            code: "TOKEN_EXPIRED",
+            message: "Your Google session expired. Please click 'Connect Gmail' to refresh your session.",
+            summaries: [],
+          });
+        }
+
+        if (listRes.status === 403) {
+          const isApiDisabled = errMsg.includes("has not been used") || errMsg.includes("disabled");
+          return res.json({
+            success: false,
+            needsSetup: isApiDisabled,
+            code: isApiDisabled ? "GMAIL_API_DISABLED" : "PERMISSION_DENIED",
+            message: isApiDisabled
+              ? "The Gmail API has not been enabled in your Google Cloud project (newsletter-d8539). Please enable it in Google Cloud Console."
+              : "Google blocked access because this app has sensitive Gmail permissions in Testing mode. Add your email as a Test User in Google Cloud Console or paste newsletter text directly.",
+            helpUrl: "https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=newsletter-d8539",
+            summaries: [],
+          });
+        }
+
+        return res.json({
+          success: false,
+          message: errMsg,
+          summaries: [],
+        });
       }
+
+      const listData = await listRes.json();
+      const messages = listData.messages || [];
+
+      for (const msg of messages) {
+        try {
+          const msgRes = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          if (msgRes.ok) {
+            const msgData = await msgRes.json();
+            const headers = msgData.payload?.headers || [];
+            const subjectHeader = headers.find((h: any) => h.name.toLowerCase() === "subject");
+            const fromHeader = headers.find((h: any) => h.name.toLowerCase() === "from");
+            const dateHeader = headers.find((h: any) => h.name.toLowerCase() === "date");
+
+            const rawSubject = subjectHeader ? subjectHeader.value : "Newsletter Update";
+            const rawFrom = fromHeader ? fromHeader.value : "Newsletter";
+            const snippet = msgData.snippet || "";
+            const bodyContent = extractEmailText(msgData.payload) || snippet;
+
+            // Parse sender name
+            let senderName = rawFrom;
+            const matchName = rawFrom.match(/^(.*?)(?:<.*?>)?$/);
+            if (matchName && matchName[1].trim()) {
+              senderName = matchName[1].replace(/["']/g, "").trim();
+            }
+
+            // Summarize the user's specific email text
+            const textToSummarize = `Newsletter: ${senderName}\nSubject: ${rawSubject}\n\n${bodyContent}`;
+            const summaryObj = extractHeuristicSummary(textToSummarize);
+
+            extractedSummaries.push({
+              id: `gmail-${msg.id}`,
+              title: rawSubject,
+              category: summaryObj.category || "Tech & AI",
+              summary: summaryObj.summary || snippet,
+              whyItMatters: summaryObj.whyItMatters || `Received directly on ${userEmail}.`,
+              source: senderName,
+              readTime: "2 min read",
+              keyPoints: summaryObj.keyPoints || [snippet.slice(0, 100)],
+              isReadLater: false,
+              createdAt: dateHeader?.value ? new Date(dateHeader.value).toISOString() : new Date().toISOString(),
+            });
+          }
+        } catch (msgErr) {
+          console.warn("Failed to fetch individual message:", msgErr);
+        }
+      }
+    } catch (gmailErr) {
+      console.error("Gmail fetch error:", gmailErr);
+      return res.status(500).json({ success: false, error: String(gmailErr) });
     }
 
     res.json({
@@ -303,7 +373,7 @@ app.post("/api/fetch-inbox-newsletters", async (req, res) => {
       summaries: extractedSummaries,
       message: extractedSummaries.length > 0
         ? `Found and summarized ${extractedSummaries.length} newsletters for ${userEmail}.`
-        : `No new unsummarized newsletters found in inbox for ${userEmail}.`,
+        : `Scanned your inbox (${userEmail}), but found no unread or recent newsletter emails. Try pasting a newsletter directly!`,
     });
   } catch (error: any) {
     console.error("Fetch inbox newsletters error:", error);

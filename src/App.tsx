@@ -11,6 +11,8 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { 
   auth, 
   signInWithGoogle, 
+  connectGmailForInboxScanning,
+  checkIsFirstTimeUser,
   signOut, 
   testFirestoreConnection,
   saveUserPreferencesToCloud,
@@ -48,6 +50,7 @@ export default function App() {
   const [routineConfig, setRoutineConfig] = useState<RoutineConfig>(INITIAL_ROUTINE);
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isFirstTimeUser, setIsFirstTimeUser] = useState<boolean>(false);
 
   // Dark Mode State
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -77,8 +80,32 @@ export default function App() {
   };
 
   // Fetch incoming newsletters received on user's mail ID
-  const fetchInboxNewslettersForUser = async (user: User) => {
-    const accessToken = sessionStorage.getItem('google_access_token');
+  const fetchInboxNewslettersForUser = async (user: User, interactive = true) => {
+    let accessToken = sessionStorage.getItem('google_access_token');
+
+    // If no access token and user clicked Scan Inbox intentionally, request Gmail permission
+    if (!accessToken && interactive) {
+      try {
+        triggerToast('Opening Google account to connect Gmail access...');
+        accessToken = await connectGmailForInboxScanning();
+      } catch (authErr: any) {
+        console.warn('Gmail permission cancelled or restricted:', authErr);
+        if (authErr?.code === 'auth/popup-closed-by-user') {
+          triggerToast('Gmail permission prompt was closed.');
+          return;
+        }
+        setAuthErrorInfo({
+          title: 'Google Gmail Permission Notice',
+          message: 'Google requires Test User configuration in Google Cloud Console before apps in Testing mode can read Gmail inboxes. Alternatively, you can paste any newsletter directly for instant AI analysis!',
+        });
+        return;
+      }
+    }
+
+    if (!accessToken) {
+      return;
+    }
+
     setIsFetchingInbox(true);
 
     try {
@@ -86,12 +113,29 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accessToken: accessToken || undefined,
+          accessToken,
           userEmail: user.email,
         }),
       });
 
       const data = await res.json();
+
+      if (data.needsAuth) {
+        sessionStorage.removeItem('google_access_token');
+        if (interactive) {
+          triggerToast('⚠️ Gmail session expired. Please click "Scan Inbox" to reconnect.');
+        }
+        return;
+      }
+
+      if (data.needsSetup) {
+        setAuthErrorInfo({
+          title: 'Gmail API Setup Needed',
+          message: data.message || 'Please enable the Gmail API in your Google Cloud project (newsletter-d8539) to allow inbox scanning.',
+        });
+        return;
+      }
+
       if (data.success && Array.isArray(data.summaries) && data.summaries.length > 0) {
         // Persist each new summary to the user's private Firestore collection
         for (const summaryItem of data.summaries) {
@@ -106,10 +150,11 @@ export default function App() {
 
         triggerToast(`📬 Found & summarized ${data.summaries.length} incoming newsletters for ${user.email}!`);
       } else {
-        triggerToast(`Inbox scanned for ${user.email}. No new incoming newsletters found.`);
+        triggerToast(data.message || `No new newsletters found in inbox. You can paste any newsletter directly!`);
       }
     } catch (err) {
       console.error('Failed to fetch inbox newsletters:', err);
+      triggerToast('Could not reach email scanner. You can paste your newsletter directly!');
     } finally {
       setIsFetchingInbox(false);
     }
@@ -126,9 +171,9 @@ export default function App() {
         const saved = userItems.filter((i) => i.isReadLater).map((i) => i.id);
         setBookmarkedIds(saved);
 
-        // If user has zero summaries, automatically trigger inbox scan for their mail ID
-        if (userItems.length === 0) {
-          await fetchInboxNewslettersForUser(user);
+        // If user already has an active access token in this session and zero summaries, scan non-interactively
+        if (userItems.length === 0 && sessionStorage.getItem('google_access_token')) {
+          await fetchInboxNewslettersForUser(user, false);
         }
       } catch (err) {
         console.error('Failed to load user summaries:', err);
@@ -167,9 +212,20 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      if (user) {
+        try {
+          const isFirst = await checkIsFirstTimeUser(user.uid);
+          setIsFirstTimeUser(isFirst);
+        } catch (e) {}
+      }
       await loadDataForUser(user);
 
       if (user) {
+        // If access token is available, automatically scan user's Gmail in the background
+        if (sessionStorage.getItem('google_access_token')) {
+          fetchInboxNewslettersForUser(user, false);
+        }
+
         if (user.email) {
           setRoutineConfig((prev) => ({ ...prev, recipientEmail: user.email! }));
         }
@@ -203,7 +259,16 @@ export default function App() {
 
   const handleSignIn = async () => {
     try {
-      await signInWithGoogle();
+      const { user, isFirstTime, hasGmailToken } = await signInWithGoogle();
+      setIsFirstTimeUser(isFirstTime);
+      if (user) {
+        const firstName = user.displayName ? user.displayName.split(' ')[0] : 'Reader';
+        triggerToast(isFirstTime ? `✨ Welcome, ${firstName}!` : `✨ Welcome back, ${firstName}!`);
+        if (hasGmailToken) {
+          triggerToast('🔍 Scanning inbox in background for Substack, Medium & newsletters...');
+          fetchInboxNewslettersForUser(user, false);
+        }
+      }
     } catch (err: any) {
       console.error('Sign-in error detail:', err);
       const code = err?.code || '';
@@ -542,8 +607,9 @@ export default function App() {
           userName={currentUser?.displayName || undefined}
           onTriggerEmailDigest={handleTriggerEmailDigest}
           isSendingEmail={isSendingEmail}
-          onFetchInboxNewsletters={currentUser ? () => fetchInboxNewslettersForUser(currentUser) : undefined}
+          onFetchInboxNewsletters={currentUser ? () => fetchInboxNewslettersForUser(currentUser, true) : undefined}
           isFetchingInbox={isFetchingInbox}
+          isFirstTimeUser={isFirstTimeUser}
         />
       </main>
 

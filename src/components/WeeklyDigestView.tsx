@@ -10,7 +10,8 @@ import {
   RefreshCw, 
   ShieldCheck,
   CheckCircle2,
-  InboxIcon
+  InboxIcon,
+  Sparkles
 } from 'lucide-react';
 import { NewsletterSummaryItem } from '../types';
 import { FigmaCard } from './FigmaCard';
@@ -28,6 +29,7 @@ interface WeeklyDigestViewProps {
   isSendingEmail?: boolean;
   onFetchInboxNewsletters?: () => Promise<void>;
   isFetchingInbox?: boolean;
+  isFirstTimeUser?: boolean;
 }
 
 export function WeeklyDigestView({
@@ -42,6 +44,7 @@ export function WeeklyDigestView({
   isSendingEmail = false,
   onFetchInboxNewsletters,
   isFetchingInbox = false,
+  isFirstTimeUser = false,
 }: WeeklyDigestViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -172,7 +175,8 @@ export function WeeklyDigestView({
             </div>
 
             <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-stone-950 dark:text-white leading-tight">
-              Welcome back, <span className="text-pink-600 dark:text-pink-400">{displayName}</span>!
+              {isFirstTimeUser ? 'Welcome, ' : 'Welcome back, '}
+              <span className="text-pink-600 dark:text-pink-400">{displayName}</span>!
             </h2>
 
             <p className="text-xs sm:text-sm text-stone-700 dark:text-stone-300 leading-relaxed font-medium">
@@ -180,7 +184,7 @@ export function WeeklyDigestView({
             </p>
           </div>
 
-          {/* Inbox Scan Action */}
+          {/* Inbox Scan & Paste Actions */}
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5">
             {onFetchInboxNewsletters && (
               <button
@@ -190,11 +194,20 @@ export function WeeklyDigestView({
                 title="Scan inbox for emails and newsletters"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isFetchingInbox ? 'animate-spin' : ''}`} />
-                <span>{isFetchingInbox ? 'Fetching Newsletters...' : 'Scan Inbox for Newsletters'}</span>
+                <span>{isFetchingInbox ? 'Fetching Newsletters...' : 'Scan Inbox'}</span>
               </button>
             )}
 
-            <div className="px-3.5 py-2 rounded-2xl bg-white dark:bg-stone-800 border-2 border-stone-900 dark:border-stone-700 shadow-[2px_2px_0px_0px_#1c1917] dark:shadow-[2px_2px_0px_0px_#000] text-center">
+            <button
+              onClick={onOpenSummarize}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-white dark:bg-stone-800 hover:bg-stone-50 dark:hover:bg-stone-750 text-stone-900 dark:text-stone-100 font-black text-xs border-2 border-stone-900 dark:border-stone-700 shadow-[2px_2px_0px_0px_#1c1917] dark:shadow-[2px_2px_0px_0px_#000] transition-all active:scale-95 cursor-pointer"
+              title="Paste any newsletter email body"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-pink-500" />
+              <span>Paste Newsletter</span>
+            </button>
+
+            <div className="px-3 py-2 rounded-2xl bg-white dark:bg-stone-800 border-2 border-stone-900 dark:border-stone-700 shadow-[2px_2px_0px_0px_#1c1917] dark:shadow-[2px_2px_0px_0px_#000] text-center">
               <span className="block text-[9px] font-black uppercase text-stone-400">Summaries</span>
               <span className="text-sm font-black text-stone-900 dark:text-stone-100">{items.length}</span>
             </div>
@@ -262,12 +275,29 @@ export function WeeklyDigestView({
             })}
           </div>
         ) : (
-          <div className="text-center py-6 px-4 border-2 border-dashed border-stone-300 dark:border-stone-700 rounded-2xl">
+          <div className="text-center py-7 px-4 border-2 border-dashed border-stone-300 dark:border-stone-750 rounded-2xl space-y-3">
             <p className="text-xs text-stone-600 dark:text-stone-400 font-medium">
               No incoming newsletters tracked for <strong>{userEmail}</strong> yet.
             </p>
-            <p className="text-[11px] text-stone-400 dark:text-stone-500 mt-1">
-              Click "Scan Inbox for Newsletters" above or paste an issue you received to generate your summary.
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              {onFetchInboxNewsletters && (
+                <button
+                  onClick={onFetchInboxNewsletters}
+                  disabled={isFetchingInbox}
+                  className="px-3.5 py-1.5 rounded-xl bg-pink-500 hover:bg-pink-400 text-white font-bold text-xs border border-stone-900 transition-all cursor-pointer"
+                >
+                  {isFetchingInbox ? 'Scanning...' : 'Scan My Gmail'}
+                </button>
+              )}
+              <button
+                onClick={onOpenSummarize}
+                className="px-3.5 py-1.5 rounded-xl bg-stone-900 dark:bg-stone-800 text-white hover:bg-stone-800 font-bold text-xs border border-stone-900 transition-all cursor-pointer"
+              >
+                Paste Any Newsletter
+              </button>
+            </div>
+            <p className="text-[10px] text-stone-400 dark:text-stone-500">
+              Paste any issue from Substack, Morning Brew, TLDR, or click Scan to search your mailbox.
             </p>
           </div>
         )}

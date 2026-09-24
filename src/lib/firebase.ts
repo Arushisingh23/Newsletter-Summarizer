@@ -35,9 +35,15 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Auth instance
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope('https://www.googleapis.com/auth/gmail.readonly');
-googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+// Standard Google Sign-In Provider (Always allowed, no sensitive scopes, works for 100% of users)
+export const loginProvider = new GoogleAuthProvider();
+loginProvider.setCustomParameters({ prompt: 'select_account' });
+
+// Gmail Reading Scope Provider (Requested specifically when user wants to scan their personal Gmail inbox)
+export const gmailProvider = new GoogleAuthProvider();
+gmailProvider.addScope('https://www.googleapis.com/auth/gmail.readonly');
+gmailProvider.setCustomParameters({ prompt: 'consent' });
 
 // Firestore instance (with named databaseId if specified)
 export const db = firebaseConfig.firestoreDatabaseId
@@ -57,22 +63,63 @@ export async function testFirestoreConnection(): Promise<boolean> {
   }
 }
 
-// Auth helpers
-export async function signInWithGoogle(): Promise<User | null> {
+// Check if user is signing in for the very first time
+export async function checkIsFirstTimeUser(userId: string): Promise<boolean> {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
-    const user = result.user;
+    const userRef = doc(db, 'users', userId);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) {
+      return true;
+    }
+    const data = snap.data();
+    return data?.isFirstTimeUser === true;
+  } catch (e) {
+    const local = localStorage.getItem(`first_time_${userId}`);
+    return local === 'true';
+  }
+}
 
-    // Capture OAuth access token for fetching user's newsletters from their Gmail
+export interface SignInResult {
+  user: User | null;
+  isFirstTime: boolean;
+  hasGmailToken: boolean;
+}
+
+// Auth helpers
+export async function signInWithGoogle(): Promise<SignInResult> {
+  let result: any = null;
+  let hasGmailToken = false;
+
+  // Try signing in with Gmail reading permissions upfront so background scanning runs immediately
+  try {
+    result = await signInWithPopup(auth, gmailProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (credential?.accessToken) {
       sessionStorage.setItem('google_access_token', credential.accessToken);
+      hasGmailToken = true;
     }
+  } catch (primaryErr: any) {
+    console.warn('Gmail scope prompt bypassed or restricted, attempting standard sign in:', primaryErr);
+    // If the user closed the popup, rethrow so we don't open another unexpected popup
+    if (primaryErr?.code === 'auth/popup-closed-by-user') {
+      throw primaryErr;
+    }
+    // Otherwise, fall back to standard login so user is never locked out by Google restricted scope rules
+    result = await signInWithPopup(auth, loginProvider);
+  }
 
-    // Save or update user profile in Firestore
-    if (user) {
-      try {
-        const userRef = doc(db, 'users', user.uid);
+  const user = result?.user || null;
+  let isFirstTime = false;
+
+  // Check and save user profile in Firestore
+  if (user) {
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      const snap = await getDoc(userRef);
+
+      if (!snap.exists()) {
+        isFirstTime = true;
+        localStorage.setItem(`first_time_${user.uid}`, 'true');
         await setDoc(
           userRef,
           {
@@ -80,17 +127,51 @@ export async function signInWithGoogle(): Promise<User | null> {
             email: user.email || '',
             displayName: user.displayName || '',
             photoURL: user.photoURL || '',
+            createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            isFirstTimeUser: true,
+            signInCount: 1,
+          }
+        );
+      } else {
+        const data = snap.data();
+        isFirstTime = data?.isFirstTimeUser === true && (data?.signInCount || 1) <= 1;
+        await setDoc(
+          userRef,
+          {
+            updatedAt: new Date().toISOString(),
+            isFirstTimeUser: false,
+            signInCount: (data?.signInCount || 1) + 1,
           },
           { merge: true }
         );
-      } catch (dbErr) {
-        console.warn('Firestore profile sync deferred (Firestore may still be initializing):', dbErr);
+        localStorage.removeItem(`first_time_${user.uid}`);
+      }
+    } catch (dbErr) {
+      console.warn('Firestore profile sync deferred:', dbErr);
+      const local = localStorage.getItem(`has_logged_in_${user.uid}`);
+      if (!local) {
+        isFirstTime = true;
+        localStorage.setItem(`has_logged_in_${user.uid}`, 'true');
       }
     }
-    return user;
+  }
+
+  return { user, isFirstTime, hasGmailToken };
+}
+
+// Dedicated helper to prompt user for Gmail read access when they want to auto-scan inbox
+export async function connectGmailForInboxScanning(): Promise<string | null> {
+  try {
+    const result = await signInWithPopup(auth, gmailProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      sessionStorage.setItem('google_access_token', credential.accessToken);
+      return credential.accessToken;
+    }
+    return null;
   } catch (error: any) {
-    console.error('Google Sign-In Error:', error);
+    console.error('Connect Gmail Permission Error:', error);
     throw error;
   }
 }
