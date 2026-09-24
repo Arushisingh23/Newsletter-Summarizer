@@ -87,29 +87,16 @@ export interface SignInResult {
 
 // Auth helpers
 export async function signInWithGoogle(): Promise<SignInResult> {
-  let result: any = null;
-  let hasGmailToken = false;
-
-  // Try signing in with Gmail reading permissions upfront so background scanning runs immediately
-  try {
-    result = await signInWithPopup(auth, gmailProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (credential?.accessToken) {
-      sessionStorage.setItem('google_access_token', credential.accessToken);
-      hasGmailToken = true;
-    }
-  } catch (primaryErr: any) {
-    console.warn('Gmail scope prompt bypassed or restricted, attempting standard sign in:', primaryErr);
-    // If the user closed the popup, rethrow so we don't open another unexpected popup
-    if (primaryErr?.code === 'auth/popup-closed-by-user') {
-      throw primaryErr;
-    }
-    // Otherwise, fall back to standard login so user is never locked out by Google restricted scope rules
-    result = await signInWithPopup(auth, loginProvider);
-  }
-
+  // Standard Google Sign-In: 100% clean, trusted, NO red warning screens
+  const result = await signInWithPopup(auth, loginProvider);
   const user = result?.user || null;
   let isFirstTime = false;
+  let hasGmailToken = false;
+
+  // Check if there's already an active Gmail token in session
+  if (sessionStorage.getItem('google_access_token')) {
+    hasGmailToken = true;
+  }
 
   // Check and save user profile in Firestore
   if (user) {
